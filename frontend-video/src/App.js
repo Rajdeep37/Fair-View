@@ -8,10 +8,14 @@ function App() {
   const roomRef = useRef(null);
   const pcRef = useRef(null);
   const localStreamRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
 
   const [cameraOn, setCameraOn] = useState(true);
   const [micOn, setMicOn] = useState(true);
   const [callActive, setCallActive] = useState(true);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordings, setRecordings] = useState([]);
 
   useEffect(() => {
     // Generate random room name if needed
@@ -111,6 +115,141 @@ function App() {
     };
   }, []);
 
+  // Add recording handlers
+  const startRecording = async () => {
+    if (!localStreamRef.current) {
+      alert('No audio stream available. Please make sure your microphone is connected and permissions are granted.');
+      return;
+    }
+
+    try {
+      audioChunksRef.current = [];
+      
+      // Get only the audio tracks from the stream
+      const audioTracks = localStreamRef.current.getAudioTracks();
+      if (audioTracks.length === 0) {
+        alert('No audio tracks found. Please make sure your microphone is working.');
+        return;
+      }
+
+      // Create a new stream with only audio tracks
+      const audioStream = new MediaStream(audioTracks);
+      
+      // Check for supported MIME types
+      const mimeTypes = [
+        'audio/webm',
+        'audio/webm;codecs=opus',
+        'audio/ogg;codecs=opus',
+        'audio/mp4',
+        'audio/mpeg'
+      ];
+
+      let selectedMimeType = '';
+      for (const mimeType of mimeTypes) {
+        if (MediaRecorder.isTypeSupported(mimeType)) {
+          selectedMimeType = mimeType;
+          break;
+        }
+      }
+
+      if (!selectedMimeType) {
+        alert('Your browser does not support audio recording. Please try a different browser.');
+        return;
+      }
+
+      console.log('Using MIME type:', selectedMimeType);
+
+      const mediaRecorder = new MediaRecorder(audioStream, {
+        mimeType: selectedMimeType,
+        audioBitsPerSecond: 128000
+      });
+
+      mediaRecorderRef.current = mediaRecorder;
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        try {
+          if (audioChunksRef.current.length === 0) {
+            alert('No audio data was recorded. Please try again.');
+            return;
+          }
+
+          const audioBlob = new Blob(audioChunksRef.current, { type: selectedMimeType });
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+          const fileExtension = selectedMimeType.split('/')[1].split(';')[0];
+          const fileName = `recording-${timestamp}.${fileExtension}`;
+
+          // Create FormData to send to server
+          const formData = new FormData();
+          formData.append('audio', audioBlob, fileName);
+
+          // Send to server
+          const response = await fetch('http://localhost:3001/save-audio', {
+            method: 'POST',
+            body: formData
+          });
+
+          if (!response.ok) {
+            throw new Error('Failed to save audio file');
+          }
+
+          const result = await response.json();
+          console.log('Audio saved:', result);
+
+          // Create URL for playback
+          const audioUrl = URL.createObjectURL(audioBlob);
+          
+          // Save the recording in state
+          setRecordings(prev => [...prev, { 
+            url: audioUrl, 
+            name: fileName, 
+            blob: audioBlob,
+            serverPath: result.path 
+          }]);
+
+          alert('Recording saved successfully!');
+        } catch (error) {
+          console.error('Error saving recording:', error);
+          alert('Error saving recording. Please try again.');
+        }
+      };
+
+      mediaRecorder.onerror = (event) => {
+        console.error('MediaRecorder error:', event);
+        alert('Error during recording. Please try again.');
+        setIsRecording(false);
+      };
+
+      // Start recording with a 1-second timeslice
+      mediaRecorder.start(1000);
+      setIsRecording(true);
+      console.log('Recording started successfully');
+    } catch (error) {
+      console.error('Error starting MediaRecorder:', error);
+      alert('Error starting recording. Please make sure your microphone is working and try again.');
+      setIsRecording(false);
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      try {
+        mediaRecorderRef.current.stop();
+        setIsRecording(false);
+        console.log('Recording stopped successfully');
+      } catch (error) {
+        console.error('Error stopping recording:', error);
+        alert('Error stopping recording. Please try again.');
+        setIsRecording(false);
+      }
+    }
+  };
+
   // Camera toggle handler
   const handleCameraToggle = () => {
     if (localStreamRef.current) {
@@ -132,7 +271,10 @@ function App() {
   };
 
   // End call handler
-  const handleEndCall = () => {
+  const handleEndCall = async () => {
+    if (isRecording) {
+      stopRecording();
+    }
     setCallActive(false);
     if (pcRef.current) {
       pcRef.current.close();
@@ -152,6 +294,24 @@ function App() {
     if (remoteVideoRef.current) {
       remoteVideoRef.current.srcObject = null;
     }
+
+    // Convert all audio files to text
+    try {
+      const response = await fetch('http://localhost:3001/convert-all-to-text', {
+        method: 'POST'
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to convert audio files');
+      }
+
+      const result = await response.json();
+      console.log('Audio to text conversion completed:', result);
+      alert('All audio recordings have been converted to text files!');
+    } catch (error) {
+      console.error('Error converting audio to text:', error);
+      alert('Error converting audio to text. Please try again.');
+    }
   };
 
   return (
@@ -164,14 +324,37 @@ function App() {
         <button onClick={handleMicToggle} disabled={!callActive}>
           {micOn ? 'Mute Mic' : 'Unmute Mic'}
         </button>
+        <button 
+          onClick={isRecording ? stopRecording : startRecording} 
+          disabled={!callActive}
+          style={{ backgroundColor: isRecording ? '#ff4444' : '#4CAF50' }}
+        >
+          {isRecording ? 'Stop Recording' : 'Start Recording'}
+        </button>
         <button onClick={handleEndCall} disabled={!callActive} style={{ color: 'red' }}>
           End Call
         </button>
       </div>
       <video ref={localVideoRef} autoPlay muted playsInline id="localVideo" style={{ display: callActive ? 'block' : 'none' }} />
       <video ref={remoteVideoRef} autoPlay playsInline id="remoteVideo" style={{ display: callActive ? 'block' : 'none' }} />
+      
+      {recordings.length > 0 && (
+        <div className="recordings">
+          <h3>Recordings</h3>
+          <ul>
+            {recordings.map((recording, index) => (
+              <li key={index}>
+                <audio controls src={recording.url} />
+                <a href={recording.url} download={recording.name}>
+                  Download {recording.name}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
 
-export default App;
+export default App; 
