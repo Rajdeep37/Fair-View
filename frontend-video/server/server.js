@@ -3,10 +3,13 @@ const multer = require('multer');
 const path = require('path');
 const cors = require('cors');
 const fs = require('fs');
-const { spawn } = require('child_process');
+const axios = require('axios');
+const FormData = require('form-data');
 
 const app = express();
 const port = 3001;
+// This points to your Python Transcription/Orchestrator API
+const PYTHON_API_URL = 'http://127.0.0.1:8000/process-interview';
 
 // Enable CORS
 app.use(cors());
@@ -29,108 +32,92 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage: storage });
 
-// Function to convert audio to text
-function convertAudioToText(audioFile) {
-    return new Promise((resolve, reject) => {
-        const pythonProcess = spawn('python', [
-            path.join(__dirname, '../../python/audioToText.py'),
-            audioFile
-        ]);
+/**
+ * Sends the audio file to the running Python FastAPI server (Port 8000)
+ * and returns the processed Q&A + Evaluation JSON.
+ */
+async function getTranscriptionFromPython(filePath) {
+    const form = new FormData();
+    // Read file from disk and append to form
+    form.append('file', fs.createReadStream(filePath));
 
-        let output = '';
-        let error = '';
-
-        pythonProcess.stdout.on('data', (data) => {
-            output += data.toString();
+    try {
+        // Send POST request to Python API
+        // This request now takes longer (up to 60s) because of the LLM step
+        const response = await axios.post(PYTHON_API_URL, form, {
+            headers: {
+                ...form.getHeaders()
+            },
+            maxContentLength: Infinity,
+            maxBodyLength: Infinity,
+            timeout: 120000 // Set timeout to 2 minutes to be safe
         });
 
-        pythonProcess.stderr.on('data', (data) => {
-            error += data.toString();
-        });
-
-        pythonProcess.on('close', (code) => {
-            if (code !== 0) {
-                console.error(`Python process error for ${audioFile}:`, error);
-                reject(new Error(`Failed to convert ${path.basename(audioFile)}: ${error}`));
-            } else {
-                resolve(output.trim());
-            }
-        });
-    });
+        return response.data;
+    } catch (error) {
+        console.error('Python API Error:', error.code || error.message);
+        if (error.response) {
+            console.error('API Response:', error.response.data);
+        }
+        throw new Error('Failed to communicate with Python analysis server');
+    }
 }
 
-// Endpoint to save audio file
-app.post('/save-audio', upload.single('audio'), (req, res) => {
+// Endpoint to save audio file and trigger analysis
+app.post('/save-audio', upload.single('audio'), async (req, res) => {
     if (!req.file) {
         return res.status(400).json({ error: 'No audio file received' });
     }
-    res.json({ 
-        message: 'Audio file saved successfully',
-        filename: req.file.filename,
-        path: req.file.path
-    });
-});
 
-// Endpoint to convert all audio files to text
-app.post('/convert-all-to-text', async (req, res) => {
+    const audioPath = req.file.path;
+    console.log(`File uploaded: ${req.file.filename}. Sending to Python API...`);
+
     try {
-        const files = fs.readdirSync(audioDir);
-        const audioFiles = files.filter(file => 
-            file.endsWith('.webm') || file.endsWith('.mp3') || file.endsWith('.wav')
-        );
+        // 1. Send file to Python API (Port 8000)
+        // This will now return { transcript, qa_pairs, evaluation_report }
+        const apiResult = await getTranscriptionFromPython(audioPath);
+        
+        console.log("API RESULT RAW:", apiResult);
+        console.log("API RESULT KEYS:", Object.keys(apiResult));
+        
+        // 2. Prepare data to save
+        const resultData = {
+            audioFile: req.file.filename,
+            timestamp: new Date().toISOString(),
+            status: apiResult.status,
+            full_transcript: apiResult.full_transcript,
+            qa_pairs: apiResult.qa_pairs,
+            evaluation_report: apiResult.evaluation_report // <--- NEW DATA INCLUDED
+        };
 
-        if (audioFiles.length === 0) {
-            return res.json({ 
-                message: 'No audio files found to convert',
-                results: []
-            });
-        }
+        // 3. Save the result as a JSON file next to the audio
+        const jsonFileName = req.file.filename.replace(/\.[^/.]+$/, '.json');
+        const jsonFilePath = path.join(audioDir, jsonFileName);
+        
+        fs.writeFileSync(jsonFilePath, JSON.stringify(resultData, null, 2));
+        console.log(`Analysis and Evaluation saved to ${jsonFileName}`);
 
-        const results = [];
-        for (const file of audioFiles) {
-            const filePath = path.join(audioDir, file);
-            try {
-                console.log(`Converting ${file} to text...`);
-                const text = await convertAudioToText(filePath);
-                const textFileName = file.replace(/\.[^/.]+$/, '.txt');
-                const textFilePath = path.join(audioDir, textFileName);
-                
-                fs.writeFileSync(textFilePath, text);
-                results.push({
-                    audioFile: file,
-                    textFile: textFileName,
-                    text: text
-                });
-                console.log(`Successfully converted ${file} to text`);
-            } catch (error) {
-                console.error(`Error converting ${file}:`, error);
-                results.push({
-                    audioFile: file,
-                    error: error.message
-                });
-            }
-        }
-
+        // 4. Send response back to Frontend
         res.json({ 
-            message: 'Conversion completed',
-            results: results
+            message: 'Interview processed successfully',
+            filename: req.file.filename,
+            jsonFilename: jsonFileName,
+            path: req.file.path,
+            transcription: apiResult.full_transcript,
+            qa_pairs: apiResult.qa_pairs,
+            evaluation_report: apiResult.evaluation_report // <--- SEND GRADES TO FRONTEND
         });
+
     } catch (error) {
-        console.error('Error in conversion process:', error);
-        res.status(500).json({ error: 'Error converting audio files' });
+        console.error('Error during processing:', error.message);
+        res.status(500).json({ 
+            message: 'Audio saved, but analysis failed. Is the Python server running?', 
+            error: error.message 
+        });
     }
 });
 
-// Endpoint to get list of audio files
-app.get('/audio-files', (req, res) => {
-    fs.readdir(audioDir, (err, files) => {
-        if (err) {
-            return res.status(500).json({ error: 'Error reading audio directory' });
-        }
-        res.json({ files });
-    });
-});
-
 app.listen(port, () => {
-    console.log(`Server running at http://localhost:${port}`);
-}); 
+    console.log(`Node Server running at http://localhost:${port}`);
+    console.log(`Make sure Python API is running at ${PYTHON_API_URL}`);
+});
