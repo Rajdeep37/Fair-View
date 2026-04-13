@@ -7,11 +7,12 @@ import { AuthView } from './AuthView';
 import { DashboardView } from './DashboardView';
 import { InterviewRoom } from './InterviewRoom';
 import { ResultsView } from './ResultsView';
+import { HomePage } from './HomePage';
 
 function App() {
   const [bootstrapping, setBootstrapping] = useState(true);
   const [session, setSession] = useState(() => readStoredSession());
-  const [view, setView] = useState(session?.token ? 'dashboard' : 'auth');
+  const [view, setView] = useState(session?.token ? 'dashboard' : 'home');
   const [authMode, setAuthMode] = useState('signin');
   const [authForm, setAuthForm] = useState({ email: '', password: '', role: 'interviewer' });
   const [roomName, setRoomName] = useState('Fair View Interview');
@@ -35,7 +36,7 @@ function App() {
     setActiveRoom(null);
     setErrorMessage('');
     setStatusMessage('');
-    setView('auth');
+    setView('home');
   }, []);
 
   const refreshWorkspace = useCallback(async (tokenOverride = session?.token) => {
@@ -171,19 +172,23 @@ function App() {
   }
 
   if (!session?.token) {
-    return (
-      <AuthView
-        mode={authMode}
-        authForm={authForm}
-        setAuthForm={setAuthForm}
-        errorMessage={errorMessage}
-        onSubmit={handleAuthSubmit}
-        onToggleMode={(nextMode) => {
-          setAuthMode(nextMode);
-          setErrorMessage('');
-        }}
-      />
-    );
+    if (view === 'auth') {
+      return (
+        <AuthView
+          mode={authMode}
+          authForm={authForm}
+          setAuthForm={setAuthForm}
+          errorMessage={errorMessage}
+          onSubmit={handleAuthSubmit}
+          onToggleMode={(nextMode) => {
+            setAuthMode(nextMode);
+            setErrorMessage('');
+          }}
+          onBack={() => setView('home')}
+        />
+      );
+    }
+    return <HomePage onGetStarted={() => setView('auth')} />;
   }
 
   if (view === 'room' && activeRoom) {

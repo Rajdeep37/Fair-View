@@ -1,10 +1,11 @@
 import React from 'react';
 import { Icons } from './Icons';
 
-export function AuthView({ mode, authForm, setAuthForm, errorMessage, onSubmit, onToggleMode }) {
+export function AuthView({ mode, authForm, setAuthForm, errorMessage, onSubmit, onToggleMode, onBack }) {
   return (
     <div className="auth-shell">
       <section className="auth-hero">
+        {onBack && <button className="ghost-btn compact back-btn auth-back" onClick={onBack}><Icons.Arrow /> Home</button>}
         <div className="brand-mark">
           <Icons.Spark />
           <span>Fair View</span>
