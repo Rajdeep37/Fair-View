@@ -7,9 +7,9 @@ const axios = require('axios');
 const FormData = require('form-data');
 
 const app = express();
-const port = 3001;
+const port = process.env.PORT || 3001;
 // This points to your Python Transcription/Orchestrator API
-const PYTHON_API_URL = 'http://127.0.0.1:8001/process-interview';
+const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://127.0.0.1:8001/process-interview';
 
 // Enable CORS
 app.use(cors());
