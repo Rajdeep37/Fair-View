@@ -9,7 +9,7 @@ const FormData = require('form-data');
 const app = express();
 const port = 3001;
 // This points to your Python Transcription/Orchestrator API
-const PYTHON_API_URL = 'http://127.0.0.1:8000/process-interview';
+const PYTHON_API_URL = 'http://127.0.0.1:8001/process-interview';
 
 // Enable CORS
 app.use(cors());
@@ -36,9 +36,11 @@ const upload = multer({ storage: storage });
  * Sends the audio file to the running Python FastAPI server (Port 8000)
  * and returns the processed Q&A + Evaluation JSON.
  */
-async function getTranscriptionFromPython(filePath) {
+async function getTranscriptionFromPython(filePath, roomId, authorization, evaluate) {
     const form = new FormData();
-    // Read file from disk and append to form
+    // Append text fields before the file to ensure reliable multipart parsing
+    form.append('room_id', roomId);
+    form.append('evaluate', evaluate);
     form.append('file', fs.createReadStream(filePath));
 
     try {
@@ -46,7 +48,8 @@ async function getTranscriptionFromPython(filePath) {
         // This request now takes longer (up to 60s) because of the LLM step
         const response = await axios.post(PYTHON_API_URL, form, {
             headers: {
-                ...form.getHeaders()
+                'Content-Type': `multipart/form-data; boundary=${form.getBoundary()}`,
+                'Authorization': authorization
             },
             maxContentLength: Infinity,
             maxBodyLength: Infinity,
@@ -59,7 +62,9 @@ async function getTranscriptionFromPython(filePath) {
         if (error.response) {
             console.error('API Response:', error.response.data);
         }
-        throw new Error('Failed to communicate with Python analysis server');
+        const wrappedError = new Error(error.response?.data?.detail || 'Failed to communicate with Python analysis server');
+        wrappedError.statusCode = error.response?.status || 500;
+        throw wrappedError;
     }
 }
 
@@ -69,13 +74,23 @@ app.post('/save-audio', upload.single('audio'), async (req, res) => {
         return res.status(400).json({ error: 'No audio file received' });
     }
 
+    if (!req.headers.authorization) {
+        return res.status(401).json({ error: 'Authorization header is required' });
+    }
+
+    const roomId = req.body.room_id || req.body.roomId;
+    if (!roomId) {
+        return res.status(400).json({ error: 'room_id is required' });
+    }
+
+    const evaluate = req.body.evaluate || 'true';
     const audioPath = req.file.path;
-    console.log(`File uploaded: ${req.file.filename}. Sending to Python API...`);
+    console.log(`File uploaded: ${req.file.filename}. Sending to Python API... (evaluate=${evaluate})`);
 
     try {
         // 1. Send file to Python API (Port 8000)
         // This will now return { transcript, qa_pairs, evaluation_report }
-        const apiResult = await getTranscriptionFromPython(audioPath);
+        const apiResult = await getTranscriptionFromPython(audioPath, roomId, req.headers.authorization, evaluate);
         
         console.log("API RESULT RAW:", apiResult);
         console.log("API RESULT KEYS:", Object.keys(apiResult));
@@ -83,11 +98,13 @@ app.post('/save-audio', upload.single('audio'), async (req, res) => {
         // 2. Prepare data to save
         const resultData = {
             audioFile: req.file.filename,
+            roomId,
             timestamp: new Date().toISOString(),
             status: apiResult.status,
             full_transcript: apiResult.full_transcript,
             qa_pairs: apiResult.qa_pairs,
-            evaluation_report: apiResult.evaluation_report // <--- NEW DATA INCLUDED
+            evaluation_report: apiResult.evaluation_report,
+            interview_id: apiResult.interview_id
         };
 
         // 3. Save the result as a JSON file next to the audio
@@ -103,6 +120,8 @@ app.post('/save-audio', upload.single('audio'), async (req, res) => {
             filename: req.file.filename,
             jsonFilename: jsonFileName,
             path: req.file.path,
+            interview_id: apiResult.interview_id,
+            room_id: roomId,
             transcription: apiResult.full_transcript,
             qa_pairs: apiResult.qa_pairs,
             evaluation_report: apiResult.evaluation_report // <--- SEND GRADES TO FRONTEND
@@ -110,8 +129,8 @@ app.post('/save-audio', upload.single('audio'), async (req, res) => {
 
     } catch (error) {
         console.error('Error during processing:', error.message);
-        res.status(500).json({ 
-            message: 'Audio saved, but analysis failed. Is the Python server running?', 
+        res.status(error.statusCode || 500).json({ 
+            message: 'Audio saved, but analysis failed.', 
             error: error.message 
         });
     }

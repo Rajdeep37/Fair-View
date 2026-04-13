@@ -2,20 +2,14 @@ fastapi==0.109.2
 uvicorn==0.27.1
 python-dotenv==1.0.1
 pydantic==2.6.1
+sqlalchemy==2.0.27
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.9
 
 # AI / LLM
 google-generativeai==0.3.2
 
-# Vector DB
-chromadb==0.4.24
-
-# NLP
-nltk==3.8.1
-deepmultilingualpunctuation==1.0.1
-
 # Audio Processing
 pydub==0.25.1
 SpeechRecognition==3.10.0
-
-# HTTP (optional but safe)
-httpx==0.26.0
