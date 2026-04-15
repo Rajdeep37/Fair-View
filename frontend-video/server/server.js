@@ -11,11 +11,15 @@ const port = process.env.PORT || 3001;
 // This points to your Python Transcription/Orchestrator API
 const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://127.0.0.1:8001/process-interview';
 
-// Enable CORS
-app.use(cors());
+// Enable CORS — restrict to known origins in production via ALLOWED_ORIGINS env var
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || '*').split(',').map(s => s.trim());
+app.use(cors({
+    origin: allowedOrigins.includes('*') ? '*' : allowedOrigins,
+}));
 
 // Create audio directory if it doesn't exist
-const audioDir = path.join(__dirname, '../../audio');
+// AUDIO_DIR env var lets you override the path; defaults to a local 'audio' folder
+const audioDir = process.env.AUDIO_DIR || path.join(__dirname, 'audio');
 if (!fs.existsSync(audioDir)) {
     fs.mkdirSync(audioDir, { recursive: true });
 }
