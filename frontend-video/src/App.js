@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import './App.css';
 import { Icons } from './Icons';
-import { API_BASE } from './config';
 import { readStoredSession, persistSession, clearStoredSession, apiRequest, normalizeInterview } from './utils';
 import { AuthView } from './AuthView';
 import { DashboardView } from './DashboardView';
